@@ -1,0 +1,14 @@
+# 環境(由 setup.ps1 重建)
+.venv/
+node_modules/
+frontend/dist/
+__pycache__/
+*.pyc
+
+# 使用者資料與模型(不進版控)
+projects/
+models/
+
+# 個人參考資料(版權物,不公開)
+/spec.txt
+/Screenshot*.png
