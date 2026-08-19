@@ -37,6 +37,20 @@ git clone <本倉庫>
 下載中斷沒關係,下次自動續傳。模型存在專案的 `models/` 資料夾,
 搬電腦時連資料夾一起複製就不用重新下載。
 
+前端已預先建置(`frontend/dist` 在版控內),一般使用**不需要安裝 Node.js**;
+只有要改前端程式碼的開發者才需要。
+
+### 疑難排解
+
+- **模型下載失敗 / 連不上 HuggingFace**(部分地區會被擋):啟動前設定鏡像站
+  環境變數即可,例如在 `start.bat` 的 `@echo off` 下一行加
+  `set HF_ENDPOINT=https://hf-mirror.com`
+- **macOS / Linux**:`setup.bat`/`start.bat` 是 Windows 腳本,其他平台請手動安裝:
+  裝好 Python 3.13 與 ffmpeg 後,`python -m venv .venv`、
+  用 venv 的 pip 裝 `backend/requirements.lock.txt`
+  (其中 `nvidia-*` 套件僅 Windows/Linux+NVIDIA 需要,mac 可略過),
+  然後 `python run.py`。核心程式是跨平台的,但主要測試環境為 Windows。
+
 ## 關閉
 
 關掉**終端機視窗**(或按 `Ctrl+C`)才是關閉伺服器;只關瀏覽器分頁的話,

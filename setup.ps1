@@ -9,6 +9,24 @@ function Test-Cmd($name) {
     return $null -ne (Get-Command $name -ErrorAction SilentlyContinue)
 }
 
+# 找「真的」Python:排除 Microsoft Store 的假 python(App execution alias,
+# 執行只會開商店),並實際跑 --version 驗證;找不到就退回 py 啟動器。
+# 回傳可執行的路徑或 "py",都沒有回傳 $null。
+function Get-Python {
+    $cmd = Get-Command python -ErrorAction SilentlyContinue
+    if ($cmd -and $cmd.Source -notlike "*\WindowsApps\*") {
+        try {
+            if ((& $cmd.Source --version 2>&1) -match "^Python \d") { return $cmd.Source }
+        } catch {}
+    }
+    if (Test-Cmd "py") {
+        try {
+            if ((& py -3 --version 2>&1) -match "^Python \d") { return "py" }
+        } catch {}
+    }
+    return $null
+}
+
 function Refresh-Path {
     $env:Path = [Environment]::GetEnvironmentVariable("Path", "Machine") + ";" +
                 [Environment]::GetEnvironmentVariable("Path", "User")
@@ -23,10 +41,12 @@ function Install-Winget($id, $label) {
 Write-Host "=== VidScribe 環境安裝 ===" -ForegroundColor Green
 
 # --- 1. Python ---
-if (-not (Test-Cmd "python")) {
+$python = Get-Python
+if ($null -eq $python) {
     Install-Winget "Python.Python.3.13" "Python 3.13"
+    $python = Get-Python
 }
-if (-not (Test-Cmd "python")) { throw "Python 安裝後仍找不到,請重開終端機再跑一次 setup" }
+if ($null -eq $python) { throw "Python 安裝後仍找不到,請重開終端機再跑一次 setup" }
 
 # --- 2. ffmpeg ---
 if (-not (Test-Cmd "ffmpeg")) {
@@ -37,7 +57,7 @@ if (-not (Test-Cmd "ffmpeg")) {
 $venvPy = ".\.venv\Scripts\python.exe"
 if (-not (Test-Path $venvPy)) {
     Write-Host ">> 建立 Python 虛擬環境 ..." -ForegroundColor Yellow
-    python -m venv .venv
+    if ($python -eq "py") { py -3 -m venv .venv } else { & $python -m venv .venv }
 }
 $lock = "backend\requirements.lock.txt"
 $req = if (Test-Path $lock) { $lock } else { "backend\requirements.txt" }
@@ -79,8 +99,9 @@ function Report($label, $ok, $detail) {
     Write-Host ("{0} {1,-14} {2}" -f $mark, $label, $detail) -ForegroundColor $color
 }
 
-$pyVer = if (Test-Cmd "python") { (python --version) } else { "" }
-Report "Python" (Test-Cmd "python") $pyVer
+$pyOk = $null -ne (Get-Python)
+$pyVer = if ($pyOk) { if ($python -eq "py") { (py -3 --version) } else { (& $python --version) } } else { "找不到真的 Python(注意 Microsoft Store 的假 python)" }
+Report "Python" $pyOk $pyVer
 
 $ff = Get-Command ffmpeg -ErrorAction SilentlyContinue
 Report "ffmpeg" ($null -ne $ff) $(if ($ff) { $ff.Source } else { "辨識與匯出需要它" })

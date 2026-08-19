@@ -1,7 +1,8 @@
 # 環境(由 setup.ps1 重建)
+# 注意:frontend/dist 刻意「有」進版控——讓使用者 clone 完不用裝 Node,
+# 開發者改完前端記得 npm run build 再 commit
 .venv/
 node_modules/
-frontend/dist/
 __pycache__/
 *.pyc
 
