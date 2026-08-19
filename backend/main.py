@@ -242,6 +242,18 @@ def get_fix(pid: str):
     return llm.get_state(pid)
 
 
+@app.put("/api/projects/{pid}/fix")
+def update_fix(pid: str, body: dict = Body(...)):
+    _get_project_or_404(pid)
+    suggestions = body.get("suggestions")
+    if not isinstance(suggestions, list) or not all(
+        isinstance(s, dict) and "id" in s and "old" in s and "new" in s for s in suggestions
+    ):
+        raise HTTPException(400, "suggestions 格式錯誤")
+    llm.update_suggestions(pid, suggestions)
+    return {"ok": True}
+
+
 @app.delete("/api/projects/{pid}/fix")
 def cancel_fix(pid: str):
     _get_project_or_404(pid)

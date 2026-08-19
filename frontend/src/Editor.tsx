@@ -668,20 +668,21 @@ export default function Editor({ projectId }: { projectId: string }) {
         next[i] = { ...next[i], text: s.new };
         return next;
       });
-      setReviewItems((list) => {
-        const next = (list ?? []).filter((x) => x !== s);
-        return next.length ? next : null;
-      });
+      const next = (reviewItems ?? []).filter((x) => x !== s);
+      api.updateFix(projectId, next).catch(() => {}); // 剩餘清單落地,重開伺服器能接著審
+      setReviewItems(next.length ? next : null);
     },
-    [setSegments]
+    [setSegments, reviewItems, projectId]
   );
 
-  const skipOne = useCallback((s: FixSuggestion) => {
-    setReviewItems((list) => {
-      const next = (list ?? []).filter((x) => x !== s);
-      return next.length ? next : null;
-    });
-  }, []);
+  const skipOne = useCallback(
+    (s: FixSuggestion) => {
+      const next = (reviewItems ?? []).filter((x) => x !== s);
+      api.updateFix(projectId, next).catch(() => {});
+      setReviewItems(next.length ? next : null);
+    },
+    [reviewItems, projectId]
+  );
 
   const acceptAll = useCallback(() => {
     const items = reviewItems ?? [];

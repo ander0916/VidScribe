@@ -73,6 +73,13 @@ export const api = {
   getFix: (id: string) =>
     fetch(`/api/projects/${id}/fix`).then((r) => json<FixJob>(r)),
 
+  updateFix: (id: string, suggestions: { id: string; old: string; new: string }[]) =>
+    fetch(`/api/projects/${id}/fix`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ suggestions }),
+    }).then((r) => json<{ ok: boolean }>(r)),
+
   cancelFix: (id: string) =>
     fetch(`/api/projects/${id}/fix`, { method: "DELETE" }).then((r) => json<{ ok: boolean }>(r)),
 

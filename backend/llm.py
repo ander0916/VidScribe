@@ -86,9 +86,48 @@ def _public_state(job: dict | None) -> dict:
     return {k: job[k] for k in ("status", "total", "done", "suggestions", "error", "started_at")}
 
 
+def _fix_file(pid: str):
+    return storage.project_dir(pid) / "fix.json"
+
+
+def _save_fix_file(pid: str, job: dict) -> None:
+    """校正結果落地,伺服器重開也還原得回來。"""
+    f = _fix_file(pid)
+    tmp = f.with_suffix(".tmp")
+    with tmp.open("w", encoding="utf-8") as fp:
+        json.dump(
+            {
+                "total": job.get("total", 1),
+                "started_at": job.get("started_at"),
+                "suggestions": job.get("suggestions", []),
+            },
+            fp,
+            ensure_ascii=False,
+        )
+    os.replace(tmp, f)
+
+
 def get_state(pid: str) -> dict:
     with _lock:
-        return _public_state(_jobs.get(pid))
+        job = _jobs.get(pid)
+        if job is not None:
+            return _public_state(job)
+    f = _fix_file(pid)
+    if f.is_file():
+        try:
+            with f.open("r", encoding="utf-8") as fp:
+                data = json.load(fp)
+            return {
+                "status": "done",
+                "total": data.get("total", 1),
+                "done": data.get("total", 1),
+                "suggestions": data.get("suggestions", []),
+                "error": None,
+                "started_at": data.get("started_at"),
+            }
+        except (OSError, json.JSONDecodeError):
+            pass
+    return {"status": "idle"}
 
 
 def cancel(pid: str) -> None:
@@ -98,6 +137,21 @@ def cancel(pid: str) -> None:
             job["cancel"] = True
         else:
             _jobs.pop(pid, None)
+    _fix_file(pid).unlink(missing_ok=True)
+
+
+def update_suggestions(pid: str, suggestions: list[dict]) -> None:
+    """審閱時同步剩餘清單(接受/略過一條就少一條),關機重開能從剩的繼續。"""
+    with _lock:
+        job = _jobs.get(pid)
+        if job and job["status"] == "done":
+            job["suggestions"] = suggestions
+        holder = dict(job) if job else {"total": 1, "started_at": None, "suggestions": suggestions}
+    holder["suggestions"] = suggestions
+    if suggestions:
+        _save_fix_file(pid, holder)
+    else:
+        _fix_file(pid).unlink(missing_ok=True)
 
 
 def start(pid: str) -> dict:
@@ -195,6 +249,10 @@ def _run(pid: str, cmd: list[str], segments: list[dict], batches: list[list[int]
                 job["suggestions"].extend(suggestions)
                 job["done"] += 1
         job["status"] = "done"
+        try:
+            _save_fix_file(pid, job)
+        except OSError:
+            traceback.print_exc()  # 存檔失敗不影響本次結果,只是重開伺服器會遺失
     except Exception as e:
         traceback.print_exc()
         job["status"] = "error"
