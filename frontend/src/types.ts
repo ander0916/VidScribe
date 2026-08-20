@@ -63,6 +63,43 @@ export interface BurnJob {
   has_file: boolean;
 }
 
+export interface ClipScores {
+  hook: number;
+  emotion: number;
+  curiosity: number;
+  value: number;
+}
+
+export interface Clip {
+  id: string;
+  start: number;
+  end: number;
+  title: string;
+  hook_text: string;
+  reason: string;
+  scores: ClipScores;
+  total_score: number;
+  /** 直式取景水平位置:-1 最左、0 置中、1 最右 */
+  pan: number;
+}
+
+export interface ClipsJob {
+  status: "idle" | "running" | "done" | "error" | "canceled";
+  clips: Clip[];
+  error: string | null;
+  started_at: number | null;
+}
+
+export interface ClipExportJob {
+  status: "idle" | "running" | "done" | "error" | "canceled";
+  queue: string[];
+  current: string | null;
+  progress: number;
+  done_ids: string[];
+  error: string | null;
+  files: string[];
+}
+
 export const RUNNING_STATUSES: Project["status"][] = [
   "uploaded",
   "extracting",

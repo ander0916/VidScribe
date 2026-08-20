@@ -19,11 +19,15 @@ import {
   uid,
 } from "./segments";
 import { diffParts } from "./diff";
-import SafeFrame, { SAFE_FRAMES, matchPresetByRatio } from "./SafeFrame";
+import ClipsPanel from "./ClipsPanel";
+import SafeFrame, { SAFE_FRAMES, SafeZoneOverlay, matchPresetByRatio } from "./SafeFrame";
 import {
   RUNNING_STATUSES,
   statusLabel,
   type BurnJob,
+  type Clip,
+  type ClipExportJob,
+  type ClipsJob,
   type DictEntry,
   type FixJob,
   type FixSuggestion,
@@ -99,6 +103,17 @@ export default function Editor({ projectId }: { projectId: string }) {
   const [reviewItems, setReviewItems] = useState<FixSuggestion[] | null>(null);
   const [nowTick, setNowTick] = useState(() => Date.now());
 
+  const [clipsJob, setClipsJob] = useState<ClipsJob | null>(null);
+  const [clips, setClips] = useState<Clip[]>([]);
+  const clipsRef = useRef(clips);
+  clipsRef.current = clips;
+  const [clipsOpen, setClipsOpen] = useState(false);
+  const [clipExport, setClipExport] = useState<ClipExportJob | null>(null);
+  const [previewClipId, setPreviewClipId] = useState<string | null>(null);
+  const previewClip = previewClipId
+    ? clips.find((c) => c.id === previewClipId) ?? null
+    : null;
+
   const [dictOpen, setDictOpen] = useState(false);
   const [dictEntries, setDictEntries] = useState<DictEntry[]>([]);
   const [dictWrong, setDictWrong] = useState("");
@@ -112,6 +127,8 @@ export default function Editor({ projectId }: { projectId: string }) {
   saveStateRef.current = saveState;
 
   const videoRef = useRef<HTMLVideoElement>(null);
+  const stopAtRef = useRef<number | null>(null);
+  const panDragRef = useRef<{ startX: number; startPan: number; width: number } | null>(null);
   const rowRefs = useRef<(HTMLDivElement | null)[]>([]);
   const loadedRef = useRef(false);
   const justLoadedRef = useRef<Segment[] | null>(null);
@@ -184,6 +201,24 @@ export default function Editor({ projectId }: { projectId: string }) {
         }
       })
       .catch(() => {});
+    api
+      .getClips(projectId)
+      .then((j) => {
+        if (!alive) return;
+        if (j.status === "running") {
+          setClipsJob(j);
+        } else if (j.status === "done") {
+          setClipsJob(j);
+          setClips(j.clips ?? []);
+        }
+      })
+      .catch(() => {});
+    api
+      .getClipExport(projectId)
+      .then((j) => {
+        if (alive) setClipExport(j); // 非進行中也要,面板靠 files 顯示「下載」
+      })
+      .catch(() => {});
     return () => {
       alive = false;
     };
@@ -240,21 +275,28 @@ export default function Editor({ projectId }: { projectId: string }) {
     return () => clearInterval(timer);
   }, [fixJob?.status, projectId]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // AI 校正時每秒跳動的計時器,讓使用者看得出工作還活著
+  // AI 校正/短片分析時每秒跳動的計時器,讓使用者看得出工作還活著
   useEffect(() => {
-    if (fixJob?.status !== "running") return;
+    if (fixJob?.status !== "running" && clipsJob?.status !== "running") return;
     setNowTick(Date.now());
     const timer = setInterval(() => setNowTick(Date.now()), 1000);
     return () => clearInterval(timer);
-  }, [fixJob?.status]);
+  }, [fixJob?.status, clipsJob?.status]);
 
-  // 播放中用 rAF 平滑更新時間(timeupdate 只有 4Hz,播放頭會頓)
+  // 播放中用 rAF 平滑更新時間(timeupdate 只有 4Hz,播放頭會頓);
+  // 順便處理「播放到指定時間就停」(短片預覽用)
   useEffect(() => {
     if (!isPlaying) return;
     let raf = 0;
     const tick = () => {
       const v = videoRef.current;
-      if (v) setCurrentTime(v.currentTime);
+      if (v) {
+        setCurrentTime(v.currentTime);
+        if (stopAtRef.current !== null && v.currentTime >= stopAtRef.current) {
+          v.pause();
+          stopAtRef.current = null;
+        }
+      }
       raf = requestAnimationFrame(tick);
     };
     raf = requestAnimationFrame(tick);
@@ -426,9 +468,20 @@ export default function Editor({ projectId }: { projectId: string }) {
   const seekTo = useCallback((t: number) => {
     const v = videoRef.current;
     if (!v) return;
+    stopAtRef.current = null; // 手動跳轉就結束範圍播放
     v.currentTime = Math.max(0, t + 0.001);
     setCurrentTime(v.currentTime);
   }, []);
+
+  /** 從 start 播到 end 自動暫停(短片預覽)。 */
+  const playRange = useCallback(
+    (start: number, end: number) => {
+      seekTo(start);
+      stopAtRef.current = end;
+      videoRef.current?.play();
+    },
+    [seekTo]
+  );
 
   const handleRowClick = useCallback(
     (index: number) => {
@@ -752,6 +805,192 @@ export default function Editor({ projectId }: { projectId: string }) {
     return () => clearInterval(timer);
   }, [burnJob?.status, projectId]);
 
+  // ---- 短片 ----
+
+  const startClipsAnalyze = () => {
+    api
+      .startClipsAnalyze(projectId)
+      .then(setClipsJob)
+      .catch((e: Error) => alert(e.message));
+  };
+
+  const cancelClipsAnalyze = () => {
+    if (!confirm("取消這次短片分析?")) return;
+    api.cancelClips(projectId).catch(() => {});
+    setClipsJob(null);
+  };
+
+  const reanalyzeClips = () => {
+    if (!confirm("重新分析會覆蓋目前的短片清單與已匯出的檔案。繼續?")) return;
+    setClipsOpen(false);
+    setPreviewClipId(null);
+    api
+      .startClipsAnalyze(projectId)
+      .then(setClipsJob)
+      .catch((e: Error) => alert(e.message));
+  };
+
+  // 短片分析輪詢;完成後打開面板
+  useEffect(() => {
+    if (clipsJob?.status !== "running") return;
+    const timer = setInterval(() => {
+      api
+        .getClips(projectId)
+        .then((j) => {
+          setClipsJob(j);
+          if (j.status === "done") {
+            setClips(j.clips ?? []);
+            if (j.clips?.length) {
+              setClipsOpen(true);
+            } else {
+              alert("AI 沒有找到適合做短片的片段。");
+              setClipsJob(null);
+            }
+          } else if (j.status === "error") {
+            alert(`短片分析失敗:${j.error ?? "未知錯誤"}`);
+            setClipsJob(null);
+          }
+        })
+        .catch(() => {});
+    }, 1500);
+    return () => clearInterval(timer);
+  }, [clipsJob?.status, projectId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  /** 短片編輯落地;改過邊界/取景的短片後端會作廢舊成品,所以順手刷新匯出狀態。 */
+  const commitClips = useCallback(
+    (next: Clip[]) => {
+      setClips(next);
+      api
+        .updateClips(projectId, next)
+        .then((r) => {
+          setClips(r.clips);
+          return api.getClipExport(projectId);
+        })
+        .then(setClipExport)
+        .catch(() => alert("短片清單儲存失敗"));
+    },
+    [projectId]
+  );
+
+  /** 起/終點跳到前/後一句的段落邊界;擋掉會讓片段短於 5 秒或頭尾反轉的移動。 */
+  const nudgeClip = useCallback(
+    (id: string, edge: "start" | "end", dir: -1 | 1) => {
+      const list = clipsRef.current;
+      const clip = list.find((c) => c.id === id);
+      if (!clip) return;
+      const eps = 0.01;
+      const segs = segmentsRef.current;
+      let next: Clip;
+      if (edge === "start") {
+        const cands = segs
+          .map((s) => s.start)
+          .filter((t) => (dir === -1 ? t < clip.start - eps : t > clip.start + eps));
+        if (!cands.length) return;
+        const t = dir === -1 ? Math.max(...cands) : Math.min(...cands);
+        if (clip.end - t < 5) return;
+        next = { ...clip, start: round3(t) };
+      } else {
+        const cands = segs
+          .map((s) => s.end)
+          .filter((t) => (dir === -1 ? t < clip.end - eps : t > clip.end + eps));
+        if (!cands.length) return;
+        const t = dir === -1 ? Math.max(...cands) : Math.min(...cands);
+        if (t - clip.start < 5) return;
+        next = { ...clip, end: round3(t) };
+      }
+      commitClips(list.map((c) => (c.id === id ? next : c)));
+    },
+    [commitClips]
+  );
+
+  const startPreview = useCallback(
+    (c: Clip) => {
+      setPreviewClipId(c.id);
+      playRange(c.start, c.end);
+    },
+    [playRange]
+  );
+
+  const exitPreview = useCallback(() => {
+    setPreviewClipId(null);
+    stopAtRef.current = null;
+    videoRef.current?.pause();
+  }, []);
+
+  const removeClip = useCallback(
+    (id: string) => {
+      setPreviewClipId((p) => (p === id ? null : p));
+      commitClips(clipsRef.current.filter((c) => c.id !== id));
+    },
+    [commitClips]
+  );
+
+  const startClipExport = useCallback(
+    (ids: string[]) => {
+      if (!ids.length) return;
+      // 先把未存的編輯沖掉,匯出才會拿到最新字幕(同燒錄)
+      window.clearTimeout(saveTimer.current);
+      api
+        .saveSubtitles(projectId, segmentsRef.current, marksRef.current)
+        .then(() => {
+          setSaveState("saved");
+          return api.startClipExport(projectId, ids);
+        })
+        .then(setClipExport)
+        .catch((e: Error) => alert(e.message));
+    },
+    [projectId]
+  );
+
+  const cancelClipExport = useCallback(() => {
+    api
+      .cancelClipExport(projectId)
+      .then(() => api.getClipExport(projectId))
+      .then(setClipExport)
+      .catch(() => {});
+  }, [projectId]);
+
+  // 短片匯出輪詢
+  useEffect(() => {
+    if (clipExport?.status !== "running") return;
+    const timer = setInterval(() => {
+      api
+        .getClipExport(projectId)
+        .then((j) => {
+          if (j.status === "error") {
+            alert(`短片匯出失敗:${j.error ?? "未知錯誤"}`);
+            api.cancelClipExport(projectId).catch(() => {});
+          }
+          setClipExport(j);
+        })
+        .catch(() => {});
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [clipExport?.status, projectId]);
+
+  // 直式預覽:左右拖曳調整取景(pan),放開才寫回伺服器
+  const onPanDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!previewClip) return;
+    e.currentTarget.setPointerCapture(e.pointerId);
+    panDragRef.current = {
+      startX: e.clientX,
+      startPan: previewClip.pan,
+      width: e.currentTarget.clientWidth,
+    };
+  };
+  const onPanMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    const d = panDragRef.current;
+    if (!d || !previewClipId) return;
+    const dpan = -((e.clientX - d.startX) / Math.max(d.width, 1)) * 2;
+    const pan = Math.max(-1, Math.min(1, d.startPan + dpan));
+    setClips((prev) => prev.map((c) => (c.id === previewClipId ? { ...c, pan } : c)));
+  };
+  const onPanUp = () => {
+    if (!panDragRef.current) return;
+    panDragRef.current = null;
+    commitClips(clipsRef.current);
+  };
+
   // ---- 詞庫 ----
 
   const openDict = () => {
@@ -936,6 +1175,29 @@ export default function Editor({ projectId }: { projectId: string }) {
               AI 校正
             </button>
           ))}
+        {llmAvailable &&
+          project.has_video !== false &&
+          (clipsJob?.status === "running" ? (
+            <button className="btn small" onClick={cancelClipsAnalyze} title="點擊取消">
+              <span className="spinner" aria-hidden /> 短片分析中
+            </button>
+          ) : clips.length > 0 ? (
+            <button
+              className="btn small"
+              onClick={() => setClipsOpen((o) => !o)}
+              title="檢視 AI 挑出的短片"
+            >
+              短片({clips.length})
+            </button>
+          ) : (
+            <button
+              className="btn small"
+              onClick={startClipsAnalyze}
+              title="用 Claude 從逐字稿挑出適合做直式短影音的片段"
+            >
+              短片
+            </button>
+          ))}
         <details className="hotkey-menu">
           <summary className="btn small">快捷鍵</summary>
           <div className="hotkey-panel">
@@ -951,12 +1213,23 @@ export default function Editor({ projectId }: { projectId: string }) {
 
       <main className="editor">
         <section className="player-pane">
-          <div className={"video-wrap" + (project.has_video === false ? " audio-only" : "")}>
+          <div
+            className={
+              "video-wrap" +
+              (project.has_video === false ? " audio-only" : "") +
+              (previewClip ? " vert-preview" : "")
+            }
+          >
             <video
               ref={videoRef}
               src={api.mediaUrl(projectId)}
               controls
               preload="metadata"
+              style={
+                previewClip
+                  ? { objectPosition: `${((previewClip.pan + 1) / 2) * 100}% center` }
+                  : undefined
+              }
               onTimeUpdate={(e) => setCurrentTime(e.currentTarget.currentTime)}
               onPlay={() => setIsPlaying(true)}
               onPause={() => setIsPlaying(false)}
@@ -971,30 +1244,55 @@ export default function Editor({ projectId }: { projectId: string }) {
                 );
               }}
             />
-            <SafeFrame videoRef={videoRef} frameKey={safeFrame} />
+            {previewClip ? (
+              <SafeZoneOverlay frameKey="vert916" />
+            ) : (
+              <SafeFrame videoRef={videoRef} frameKey={safeFrame} />
+            )}
             {activeText && <div className="subtitle-overlay">{activeText}</div>}
+            {previewClip && (
+              <div
+                className="pan-drag-layer"
+                title="左右拖曳調整取景"
+                onPointerDown={onPanDown}
+                onPointerMove={onPanMove}
+                onPointerUp={onPanUp}
+                onPointerCancel={onPanUp}
+              />
+            )}
           </div>
-          <div className="player-controls">
-            <label className="wave-zoom-label" htmlFor="safeframe-select">
-              安全框
-            </label>
-            <select
-              id="safeframe-select"
-              className="select"
-              value={safeFrame}
-              onChange={(e) => {
-                setSafeFrame(e.target.value);
-                localStorage.setItem(`vidscribe:safeframe:${projectId}`, e.target.value);
-              }}
-            >
-              {SAFE_FRAMES.map((p) => (
-                <option key={p.key} value={p.key}>
-                  {p.label}
-                </option>
-              ))}
-            </select>
-            <span className="hint">紅色斜紋是平台 UI 會遮住的區域,字幕壓到就該換行</span>
-          </div>
+          {previewClip ? (
+            <div className="player-controls">
+              <button className="btn small" onClick={exitPreview}>
+                離開直式預覽
+              </button>
+              <span className="hint">
+                左右拖曳畫面調整取景(會存起來,匯出照這個構圖);紅色區是平台 UI 遮擋處
+              </span>
+            </div>
+          ) : (
+            <div className="player-controls">
+              <label className="wave-zoom-label" htmlFor="safeframe-select">
+                安全框
+              </label>
+              <select
+                id="safeframe-select"
+                className="select"
+                value={safeFrame}
+                onChange={(e) => {
+                  setSafeFrame(e.target.value);
+                  localStorage.setItem(`vidscribe:safeframe:${projectId}`, e.target.value);
+                }}
+              >
+                {SAFE_FRAMES.map((p) => (
+                  <option key={p.key} value={p.key}>
+                    {p.label}
+                  </option>
+                ))}
+              </select>
+              <span className="hint">紅色斜紋是平台 UI 會遮住的區域,字幕壓到就該換行</span>
+            </div>
+          )}
         </section>
 
         <section className="subtitle-pane">
@@ -1137,6 +1435,7 @@ export default function Editor({ projectId }: { projectId: string }) {
         </div>
       )}
 
+      <div className="toast-stack">
       {fixJob?.status === "running" && (
         <div className="fix-status" role="status">
           <div className="fix-status-head">
@@ -1169,12 +1468,55 @@ export default function Editor({ projectId }: { projectId: string }) {
         </div>
       )}
 
+      {clipsJob?.status === "running" && (
+        <div className="fix-status" role="status">
+          <div className="fix-status-head">
+            <span className="spinner" aria-hidden />
+            <span className="fix-title">短片分析中</span>
+            <span className="toolbar-spacer" />
+            <button className="btn small" onClick={cancelClipsAnalyze}>
+              取消
+            </button>
+          </div>
+          <span className="bar fix-status-bar">
+            <span className="bar-fill pulsing" style={{ width: "30%" }} />
+          </span>
+          <div className="fix-status-info">
+            整份逐字稿一次分析 · 已執行{" "}
+            {clipsJob.started_at
+              ? Math.max(0, Math.floor(nowTick / 1000 - clipsJob.started_at))
+              : 0}{" "}
+            秒
+          </div>
+        </div>
+      )}
+
+      {clipExport?.status === "running" && (
+        <div className="fix-status" role="status">
+          <div className="fix-status-head">
+            <span className="spinner" aria-hidden />
+            <span className="fix-title">短片匯出中</span>
+            <span className="toolbar-spacer" />
+            <button className="btn small" onClick={cancelClipExport}>
+              取消
+            </button>
+          </div>
+          <span className="bar fix-status-bar">
+            <span
+              className="bar-fill pulsing"
+              style={{ width: `${Math.max(clipExport.progress * 100, 5)}%` }}
+            />
+          </span>
+          <div className="fix-status-info">
+            第 {clipExport.done_ids.length + 1}/
+            {clipExport.done_ids.length + 1 + clipExport.queue.length} 支 ·{" "}
+            {Math.round(clipExport.progress * 100)}%
+          </div>
+        </div>
+      )}
+
       {burnJob && (burnJob.status === "running" || burnJob.status === "done") && (
-        <div
-          className="fix-status"
-          role="status"
-          style={{ bottom: fixJob?.status === "running" ? 150 : 16 }}
-        >
+        <div className="fix-status" role="status">
           <div className="fix-status-head">
             {burnJob.status === "running" && <span className="spinner" aria-hidden />}
             <span className="fix-title">
@@ -1208,6 +1550,26 @@ export default function Editor({ projectId }: { projectId: string }) {
             </div>
           )}
         </div>
+      )}
+      </div>
+
+      {clipsOpen && (
+        <ClipsPanel
+          clips={clips}
+          exportJob={clipExport}
+          previewClipId={previewClipId}
+          projectId={projectId}
+          onPreview={startPreview}
+          onExitPreview={exitPreview}
+          onNudge={nudgeClip}
+          onRemove={removeClip}
+          onExport={startClipExport}
+          onReanalyze={reanalyzeClips}
+          onClose={() => {
+            setClipsOpen(false);
+            exitPreview();
+          }}
+        />
       )}
 
       {reviewItems && (

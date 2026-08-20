@@ -1086,10 +1086,8 @@ a.btn {
 
 /* ---- AI 校正執行狀態卡 ---- */
 
+/* 卡片本體不定位,由 .toast-stack 統一疊在右下角 */
 .fix-status {
-  position: fixed;
-  right: 16px;
-  bottom: 16px;
   width: 300px;
   background: var(--panel);
   border: 1px solid var(--line);
@@ -1251,6 +1249,175 @@ a.btn {
   font-size: 13.5px;
   max-width: 560px;
   margin: 0;
+}
+
+/* ---- 短片 ---- */
+
+/* 右下角進度卡統一由這裡疊放,多個工作同時跑也不會互蓋 */
+.toast-stack {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  z-index: 40;
+  pointer-events: none;
+}
+
+.toast-stack .fix-status {
+  pointer-events: auto;
+}
+
+.clip-item {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.clip-item.previewing {
+  border-color: var(--green);
+  box-shadow: 0 0 0 3px var(--green-soft);
+}
+
+.clip-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.clip-score {
+  flex: none;
+  font-size: 12.5px;
+  font-weight: 700;
+  border-radius: 999px;
+  padding: 2px 9px;
+  background: var(--panel-2);
+  color: var(--muted);
+}
+
+.clip-score.high {
+  background: var(--green-soft);
+  color: var(--green-dark);
+}
+
+.clip-score.mid {
+  background: #fdf3dd;
+  color: #a06b0a;
+}
+
+.clip-title {
+  font-weight: 650;
+  font-size: 14px;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.clip-dur {
+  flex: none;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
+.clip-times {
+  font-size: 13px;
+  gap: 2px;
+  color: var(--text);
+}
+
+.clip-times .clip-arrow {
+  color: var(--muted);
+  margin: 0 4px;
+}
+
+.clip-nudge {
+  border: none;
+  background: none;
+  padding: 0 4px;
+  font-size: 13px;
+  color: var(--muted);
+  cursor: pointer;
+  border-radius: 6px;
+}
+
+.clip-nudge:hover {
+  color: var(--green-dark);
+  background: var(--green-softer);
+}
+
+.clip-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.clip-chip {
+  font-size: 12px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 1px 8px;
+  color: var(--muted);
+}
+
+.clip-reason {
+  font-size: 13px;
+  color: var(--muted);
+  line-height: 1.55;
+}
+
+.clip-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.clip-export-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
+/* 直式預覽:容器鎖 9:16,畫面用 cover 裁切,object-position 對應匯出時的 crop 位置 */
+.video-wrap.vert-preview {
+  aspect-ratio: 9 / 16;
+  height: min(60vh, 78vw);
+  width: auto;
+  margin-inline: auto;
+}
+
+.video-wrap.vert-preview video {
+  width: 100%;
+  height: 100%;
+  max-height: none;
+  object-fit: cover;
+}
+
+/* 對齊燒錄用的 margin_v_ratio = 0.24 */
+.video-wrap.vert-preview .subtitle-overlay {
+  bottom: 24%;
+}
+
+.pan-drag-layer {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  bottom: 56px; /* 底部留給原生播放控制列 */
+  cursor: grab;
+  touch-action: none;
+  z-index: 7;
+}
+
+.pan-drag-layer:active {
+  cursor: grabbing;
 }
 
 /* ---- 響應式 ---- */

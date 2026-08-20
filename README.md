@@ -19,6 +19,9 @@
 - **詞庫**:「錯誤寫法 → 正確寫法」清單,每次辨識完自動取代(人名、品牌名一勞永逸)
 - **AI 校正(選配)**:偵測到 [Claude Code](https://claude.com/claude-code) 就會出現——
   用你自己的訂閱抓同音錯字與中國用語,diff 逐句審閱,不自動套用、碰不到時間軸
+- **短片(選配)**:AI 從逐字稿挑出適合 Shorts/Reels 的片段(抓力/情緒/好奇/價值
+  0–10 評分、附理由),逐支預覽、微調頭尾與水平取景後匯出 9:16 直式影片
+  (自動裁切+燒錄字幕,字幕自動避開平台底部 UI 區)
 - **安全框**:16:9 / 9:16 / 4:3 / 3:4 預覽平台 UI 遮擋區,提醒字幕換行
 - **匯出**:SRT、VTT、逐字稿(純文字/含時間),或直接燒錄字幕輸出成品影片
   (NVENC 硬體編碼,自動降級 CPU)
@@ -82,6 +85,9 @@ git clone <本倉庫>
 | `VIDSCRIBE_DATA` | `./projects` | 專案資料存放位置 |
 | `VIDSCRIBE_MODELS` | `./models` | 模型存放位置 |
 | `VIDSCRIBE_FIX_MODEL` | `sonnet` | AI 校正使用的 Claude 模型 |
+| `VIDSCRIBE_CLIPS_MODEL` | `sonnet` | 短片分析使用的 Claude 模型 |
+| `VIDSCRIBE_CLIP_MIN` | `15` | 短片長度下限(秒) |
+| `VIDSCRIBE_CLIP_MAX` | `75` | 短片長度上限(秒) |
 
 ## 開發
 

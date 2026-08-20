@@ -1,4 +1,6 @@
-import type { BurnJob, DictEntry, FixJob, Project, Segment } from "./types";
+import type {
+  BurnJob, Clip, ClipExportJob, ClipsJob, DictEntry, FixJob, Project, Segment,
+} from "./types";
 
 async function json<T>(res: Response): Promise<T> {
   if (!res.ok) {
@@ -100,6 +102,43 @@ export const api = {
     ),
 
   burnFileUrl: (id: string) => `/api/projects/${id}/burn/file`,
+
+  startClipsAnalyze: (id: string) =>
+    fetch(`/api/projects/${id}/clips/analyze`, { method: "POST" }).then((r) =>
+      json<ClipsJob>(r)
+    ),
+
+  getClips: (id: string) =>
+    fetch(`/api/projects/${id}/clips`).then((r) => json<ClipsJob>(r)),
+
+  updateClips: (id: string, clips: Clip[]) =>
+    fetch(`/api/projects/${id}/clips`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ clips }),
+    }).then((r) => json<{ clips: Clip[] }>(r)),
+
+  cancelClips: (id: string) =>
+    fetch(`/api/projects/${id}/clips`, { method: "DELETE" }).then((r) =>
+      json<{ ok: boolean }>(r)
+    ),
+
+  startClipExport: (id: string, ids: string[]) =>
+    fetch(`/api/projects/${id}/clips/export`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ids }),
+    }).then((r) => json<ClipExportJob>(r)),
+
+  getClipExport: (id: string) =>
+    fetch(`/api/projects/${id}/clips/export`).then((r) => json<ClipExportJob>(r)),
+
+  cancelClipExport: (id: string) =>
+    fetch(`/api/projects/${id}/clips/export`, { method: "DELETE" }).then((r) =>
+      json<{ ok: boolean }>(r)
+    ),
+
+  clipFileUrl: (id: string, cid: string) => `/api/projects/${id}/clips/${cid}/file`,
 
   mediaUrl: (id: string) => `/api/projects/${id}/media`,
   exportUrl: (id: string, format: string) => `/api/projects/${id}/export?format=${format}`,
