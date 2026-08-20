@@ -10,7 +10,10 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
-from . import burn, config, cuts, dictionary, exporter, llm, storage, transcriber, waveform
+from . import (
+    burn, clip_export, clips, config, cuts, dictionary, exporter, llm,
+    storage, transcriber, waveform,
+)
 
 MEDIA_EXTS = {
     ".mp4", ".mov", ".mkv", ".webm", ".avi", ".mts", ".m2ts",
@@ -259,6 +262,82 @@ def cancel_fix(pid: str):
     _get_project_or_404(pid)
     llm.cancel(pid)
     return {"ok": True}
+
+
+@app.post("/api/projects/{pid}/clips/analyze")
+def start_clips_analyze(pid: str):
+    _get_project_or_404(pid)
+    try:
+        return clips.start(pid)
+    except RuntimeError as e:
+        raise HTTPException(409, str(e))
+
+
+@app.get("/api/projects/{pid}/clips")
+def get_clips(pid: str):
+    _get_project_or_404(pid)
+    return clips.get_state(pid)
+
+
+@app.put("/api/projects/{pid}/clips")
+def update_clips(pid: str, body: dict = Body(...)):
+    _get_project_or_404(pid)
+    items = body.get("clips")
+    if not isinstance(items, list) or not all(
+        isinstance(c, dict) and "id" in c and "start" in c and "end" in c for c in items
+    ):
+        raise HTTPException(400, "clips 格式錯誤")
+    return {"clips": clips.update_clips(pid, items)}
+
+
+@app.delete("/api/projects/{pid}/clips")
+def cancel_clips(pid: str):
+    _get_project_or_404(pid)
+    clips.cancel(pid)
+    return {"ok": True}
+
+
+@app.post("/api/projects/{pid}/clips/export")
+def start_clip_export(pid: str, body: dict = Body(...)):
+    _get_project_or_404(pid)
+    ids = body.get("ids")
+    if not isinstance(ids, list) or not all(isinstance(i, str) for i in ids):
+        raise HTTPException(400, "ids 格式錯誤")
+    try:
+        return clip_export.start(pid, ids)
+    except RuntimeError as e:
+        raise HTTPException(409, str(e))
+
+
+@app.get("/api/projects/{pid}/clips/export")
+def get_clip_export(pid: str):
+    _get_project_or_404(pid)
+    return clip_export.get_state(pid)
+
+
+@app.delete("/api/projects/{pid}/clips/export")
+def cancel_clip_export(pid: str):
+    _get_project_or_404(pid)
+    clip_export.cancel(pid)
+    return {"ok": True}
+
+
+@app.get("/api/projects/{pid}/clips/{cid}/file")
+def get_clip_file(pid: str, cid: str):
+    meta = _get_project_or_404(pid)
+    clip = next((c for c in clips.load_clips(pid) if c["id"] == cid), None)
+    if clip is None:
+        raise HTTPException(404, "找不到指定的短片")
+    path = clips.clips_dir(pid) / f"{clip['id']}.mp4"  # 用查表後的 id 組路徑,不碰原始輸入
+    if not path.is_file():
+        raise HTTPException(404, "這支短片還沒匯出")
+    title = "".join(ch for ch in clip["title"] if ch not in '\\/:*?"<>|').strip() or clip["id"]
+    filename = urllib.parse.quote(f"{meta['name']}_{title}.mp4")
+    return FileResponse(
+        path,
+        media_type="video/mp4",
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{filename}"},
+    )
 
 
 @app.get("/api/projects/{pid}/waveform")
