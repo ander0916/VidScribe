@@ -1,18 +1,19 @@
 import asyncio
-import os
 import shutil
 import urllib.parse
 from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import Body, FastAPI, File, HTTPException, Request, UploadFile
-from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
-from . import burn, config, cuts, dictionary, exporter, llm, storage, transcriber, waveform
+from . import (
+    burn, clip_export, clips, config, cuts, dictionary, exporter, llm,
+    storage, transcriber, waveform,
+)
 
 MEDIA_EXTS = {
     ".mp4", ".mov", ".mkv", ".webm", ".avi", ".mts", ".m2ts",
@@ -41,32 +42,22 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="VidScribe", lifespan=lifespan)
 app.add_middleware(GZipMiddleware, minimum_size=1024)
 
-# 擋 DNS rebinding:只接受本機 Host + 額外允許的主機
-_extra_hosts = [h.strip() for h in os.environ.get("VIDSCRIBE_EXTRA_HOSTS", "").split(",") if h.strip()]
-app.add_middleware(TrustedHostMiddleware, allowed_hosts=["127.0.0.1", "localhost", "*."] + _extra_hosts)
+# 擋 DNS rebinding:只接受本機 Host,其他一律拒絕
+app.add_middleware(TrustedHostMiddleware, allowed_hosts=["127.0.0.1", "localhost"])
 
-# CORS:允許前端域名跨域存取 API
-_CORS_ORIGINS = [
+# 擋 CSRF:跨站的「簡單請求」(如 multipart POST)不需 preflight 就會送達,
+# 瀏覽器會帶上 Origin,非本站來源的寫入請求一律拒絕(無 Origin 的本機工具照常)。
+_ALLOWED_ORIGINS = {
     f"http://127.0.0.1:{config.PORT}",
     f"http://localhost:{config.PORT}",
-]
-_extra_origins = [o.strip() for o in os.environ.get("VIDSCRIBE_EXTRA_ORIGINS", "").split(",") if o.strip()]
-_CORS_ORIGINS.extend(_extra_origins)
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=_CORS_ORIGINS,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+}
 
 
 @app.middleware("http")
 async def csrf_guard(request: Request, call_next):
-    """CSRF 保護:只擋非簡單請求的跨站寫入(帶 Origin 且不在白名單)。"""
     if request.method not in ("GET", "HEAD", "OPTIONS"):
         origin = request.headers.get("origin")
-        if origin and origin not in _CORS_ORIGINS:
+        if origin and origin not in _ALLOWED_ORIGINS:
             return JSONResponse({"detail": "跨站請求被拒"}, status_code=403)
     return await call_next(request)
 
@@ -240,10 +231,15 @@ def llm_status():
 
 
 @app.post("/api/projects/{pid}/fix")
-def start_fix(pid: str):
+def start_fix(pid: str, body: dict = Body(None)):
     _get_project_or_404(pid)
+    ids = (body or {}).get("ids")
+    if ids is not None and (
+        not isinstance(ids, list) or not all(isinstance(i, str) for i in ids)
+    ):
+        raise HTTPException(400, "ids 格式錯誤")
     try:
-        return llm.start(pid)
+        return llm.start(pid, ids)
     except RuntimeError as e:
         raise HTTPException(409, str(e))
 
@@ -257,12 +253,12 @@ def get_fix(pid: str):
 @app.put("/api/projects/{pid}/fix")
 def update_fix(pid: str, body: dict = Body(...)):
     _get_project_or_404(pid)
-    suggestions = body.get("suggestions")
-    if not isinstance(suggestions, list) or not all(
-        isinstance(s, dict) and "id" in s and "old" in s and "new" in s for s in suggestions
+    items = body.get("remove")
+    if not isinstance(items, list) or not all(
+        isinstance(s, dict) and "id" in s and "old" in s for s in items
     ):
-        raise HTTPException(400, "suggestions 格式錯誤")
-    llm.update_suggestions(pid, suggestions)
+        raise HTTPException(400, "remove 格式錯誤")
+    llm.remove_suggestions(pid, items)
     return {"ok": True}
 
 
@@ -271,6 +267,85 @@ def cancel_fix(pid: str):
     _get_project_or_404(pid)
     llm.cancel(pid)
     return {"ok": True}
+
+
+@app.post("/api/projects/{pid}/clips/analyze")
+def start_clips_analyze(pid: str):
+    _get_project_or_404(pid)
+    # 分析成功會整批換掉 clip id 並清空 clips/,和進行中的匯出互斥
+    if clip_export.get_state(pid)["status"] == "running":
+        raise HTTPException(409, "短片匯出進行中,請先等它完成或取消,再重新分析")
+    try:
+        return clips.start(pid)
+    except RuntimeError as e:
+        raise HTTPException(409, str(e))
+
+
+@app.get("/api/projects/{pid}/clips")
+def get_clips(pid: str):
+    _get_project_or_404(pid)
+    return clips.get_state(pid)
+
+
+@app.put("/api/projects/{pid}/clips")
+def update_clips(pid: str, body: dict = Body(...)):
+    _get_project_or_404(pid)
+    items = body.get("clips")
+    if not isinstance(items, list) or not all(
+        isinstance(c, dict) and "id" in c and "start" in c and "end" in c for c in items
+    ):
+        raise HTTPException(400, "clips 格式錯誤")
+    return {"clips": clips.update_clips(pid, items)}
+
+
+@app.delete("/api/projects/{pid}/clips")
+def cancel_clips(pid: str):
+    _get_project_or_404(pid)
+    clips.cancel(pid)
+    return {"ok": True}
+
+
+@app.post("/api/projects/{pid}/clips/export")
+def start_clip_export(pid: str, body: dict = Body(...)):
+    _get_project_or_404(pid)
+    ids = body.get("ids")
+    if not isinstance(ids, list) or not all(isinstance(i, str) for i in ids):
+        raise HTTPException(400, "ids 格式錯誤")
+    try:
+        return clip_export.start(pid, ids)
+    except RuntimeError as e:
+        raise HTTPException(409, str(e))
+
+
+@app.get("/api/projects/{pid}/clips/export")
+def get_clip_export(pid: str):
+    _get_project_or_404(pid)
+    return clip_export.get_state(pid)
+
+
+@app.delete("/api/projects/{pid}/clips/export")
+def cancel_clip_export(pid: str):
+    _get_project_or_404(pid)
+    clip_export.cancel(pid)
+    return {"ok": True}
+
+
+@app.get("/api/projects/{pid}/clips/{cid}/file")
+def get_clip_file(pid: str, cid: str):
+    meta = _get_project_or_404(pid)
+    clip = next((c for c in clips.load_clips(pid) if c["id"] == cid), None)
+    if clip is None:
+        raise HTTPException(404, "找不到指定的短片")
+    path = clips.clips_dir(pid) / f"{clip['id']}.mp4"  # 用查表後的 id 組路徑,不碰原始輸入
+    if not path.is_file():
+        raise HTTPException(404, "這支短片還沒匯出")
+    title = "".join(ch for ch in clip["title"] if ch not in '\\/:*?"<>|').strip() or clip["id"]
+    filename = urllib.parse.quote(f"{meta['name']}_{title}.mp4")
+    return FileResponse(
+        path,
+        media_type="video/mp4",
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{filename}"},
+    )
 
 
 @app.get("/api/projects/{pid}/waveform")

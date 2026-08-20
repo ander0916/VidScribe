@@ -55,13 +55,40 @@ def _ass_escape(text: str) -> str:
     return text.replace("{", "(").replace("}", ")").replace("\n", "\\N")
 
 
-def to_ass(segments: list[dict], width: int, height: int) -> str:
-    """燒錄用 ASS 字幕:粗正黑、白字黑邊、置底置中,大小按解析度縮放。"""
-    fs = max(round(height * 0.055), 16)
-    outline = max(round(height * 0.004), 2)
-    shadow = max(round(height * 0.002), 1)
-    margin_v = max(round(height * 0.09), 20)
+def _wrap_line(text: str, max_units: float) -> str:
+    """超寬的行先斷好:中文沒有空白,libass 預設不做 unicode 斷行,會直接爆出畫面。
+
+    以全形字=1、半形字=0.5 估寬,超過 max_units 就換行。
+    """
+    out: list[str] = []
+    for line in text.split("\n"):
+        cur: list[str] = []
+        units = 0.0
+        for ch in line:
+            w = 1.0 if ord(ch) >= 0x2E80 else 0.5
+            if cur and units + w > max_units:
+                out.append("".join(cur))
+                cur, units = [], 0.0
+            cur.append(ch)
+            units += w
+        out.append("".join(cur))
+    return "\n".join(out)
+
+
+def to_ass(segments: list[dict], width: int, height: int, margin_v_ratio: float = 0.09) -> str:
+    """燒錄用 ASS 字幕:粗正黑、白字黑邊、置底置中,大小按解析度縮放。
+
+    margin_v_ratio:字幕距底比例。直式短片要避開 Shorts/Reels 底部 UI 區,傳 0.24。
+    """
+    # 字級按短邊算:橫式=高(行為不變),直式=寬(按高算 9:16 會一行塞不到十個字)
+    ref = min(width, height)
+    fs = max(round(ref * 0.055), 16)
+    outline = max(round(ref * 0.004), 2)
+    shadow = max(round(ref * 0.002), 1)
+    margin_v = max(round(height * margin_v_ratio), 20)
     margin_lr = max(round(width * 0.06), 20)
+    # 一行塞得下的全形字數(0.95 是粗體的保險係數)
+    max_units = max((width - 2 * margin_lr) / fs * 0.95, 4.0)
     header = (
         "[Script Info]\n"
         "ScriptType: v4.00+\n"
@@ -82,7 +109,7 @@ def to_ass(segments: list[dict], width: int, height: int) -> str:
     )
     events = [
         f"Dialogue: 0,{_ass_time(s['start'])},{_ass_time(s['end'])},Default,,0,0,0,,"
-        f"{_ass_escape(s['text'])}"
+        f"{_ass_escape(_wrap_line(s['text'], max_units))}"
         for s in segments
         if s["text"].strip()
     ]

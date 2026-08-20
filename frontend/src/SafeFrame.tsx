@@ -64,6 +64,33 @@ export function matchPresetByRatio(vw: number, vh: number): string {
   return best;
 }
 
+/** 純危險區疊層:容器本身就是目標比例時用(如 9:16 直式預覽),鋪滿整個容器。 */
+export function SafeZoneOverlay({ frameKey }: { frameKey: string }) {
+  const preset = SAFE_FRAMES.find((p) => p.key === frameKey);
+  if (!preset || !preset.ratio) return null;
+  return (
+    <div className="safe-frame" style={{ left: 0, top: 0, width: "100%", height: "100%" }}>
+      {preset.margin && (
+        <div className="safe-margin" style={{ inset: `${preset.margin * 100}%` }} />
+      )}
+      {preset.zones.map((z, i) => (
+        <div
+          key={i}
+          className="safe-zone"
+          style={{
+            left: `${z.x * 100}%`,
+            top: `${z.y * 100}%`,
+            width: `${z.w * 100}%`,
+            height: `${z.h * 100}%`,
+          }}
+        >
+          {z.label}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 /** 疊在影片實際內容區上(自動扣掉上下/左右黑邊)。 */
 export default function SafeFrame({
   videoRef,

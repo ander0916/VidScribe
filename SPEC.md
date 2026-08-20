@@ -105,6 +105,32 @@ claude -p "<提示詞>" --output-format json --json-schema "<schema>"
 - **錯誤處理**:檢查 `is_error`、`subtype == "success"`、設 subprocess timeout
   (單批建議 120s),失敗的批次可重試或跳過,不擋住其他批次。
 
+**再實測(2026-08-20)——精簡呼叫,單批 62s→16s、tokens 33k→3k**:
+
+```
+claude -p --output-format json --model sonnet \
+  --system-prompt "<單行任務提示詞,要求回傳純 JSON>" \
+  --exclude-dynamic-system-prompt-sections \
+  --strict-mcp-config --setting-sources project --disallowedTools "*"
+```
+
+- 固定開銷的大宗是 **Claude Code 預設 agent 環境**(系統提示詞+工具定義+
+  使用者的 MCP servers),`--system-prompt` 整個換掉就消失。
+- **`--exclude-dynamic-system-prompt-sections` 必加**:換了系統提示詞後 CLI
+  預設仍會附加動態環境段落(cwd 路徑、git 資訊),模型看到目錄名叫 VidScribe
+  就把字幕裡的「What's up!」改成「VidScribe!」(實測誤傷,加旗標後消失)。
+- **`--json-schema` 與精簡配置互斥**:結構化輸出靠工具呼叫、要多繞 2 個 turn,
+  而 `--disallowedTools "*"` 會把它的工具也擋掉(sonnet 空回、haiku 重試 5 次
+  失敗)。改成系統提示詞要求純 JSON、程式端解析、失敗重試一次。
+- **系統提示詞必須壓成單行**:多行 argv 經 npm 版 claude.cmd 轉手會截斷。
+- **模型**:haiku 實測比 sonnet 更慢又漏抓(23s、4/5 vs 16s、5/5),維持 sonnet。
+- **關 thinking 再快 3 倍**:精簡配置後延遲主因是 thinking 的輸出量
+  (同一批 out tokens 1.2k~4.6k 亂飄,生成 ~100 tok/s)。錯字校正是機械任務,
+  子行程掛 `MAX_THINKING_TOKENS=0` 後單批 13~16s→4~5s、耗時穩定、品質不變。
+- **不必沿用 session**:精簡後的系統提示詞前綴會跨呼叫命中 prompt cache
+  (實測獨立呼叫 cache_read 相同),`--resume` 反而要拖著先前批次的對話史
+  (cache_write 隨批遞增)、多一份 session 狀態要管,還汙染 `claude -r` 清單。
+
 ### 3.6 影片預覽區
 - 影片播放 + 字幕即時疊加預覽。
 - **字幕樣式:寫死一套好看的預設**(粗黑體 + 外框 + 陰影,置底置中),

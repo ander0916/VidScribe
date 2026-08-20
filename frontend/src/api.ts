@@ -1,7 +1,6 @@
-import type { BurnJob, DictEntry, FixJob, Project, Segment } from "./types";
-
-/** API 基礎位址：Cloudflare Pages 部署時從環境變數讀取 */
-const BASE = import.meta.env.VITE_API_BASE ?? "";
+import type {
+  BurnJob, Clip, ClipExportJob, ClipsJob, DictEntry, FixJob, Project, Segment,
+} from "./types";
 
 async function json<T>(res: Response): Promise<T> {
   if (!res.ok) {
@@ -18,94 +17,137 @@ async function json<T>(res: Response): Promise<T> {
 
 export const api = {
   getHealth: () =>
-    fetch(`${BASE}/api/health`).then((r) => json<{ ffmpeg: boolean; claude: boolean }>(r)),
+    fetch("/api/health").then((r) => json<{ ffmpeg: boolean; claude: boolean }>(r)),
 
-  listProjects: () => fetch(`${BASE}/api/projects`).then((r) => json<Project[]>(r)),
+  listProjects: () => fetch("/api/projects").then((r) => json<Project[]>(r)),
 
-  getProject: (id: string) => fetch(`${BASE}/api/projects/${id}`).then((r) => json<Project>(r)),
+  getProject: (id: string) => fetch(`/api/projects/${id}`).then((r) => json<Project>(r)),
 
   deleteProject: (id: string) =>
     fetch(`/api/projects/${id}`, { method: "DELETE" }).then((r) => json<{ ok: boolean }>(r)),
 
   retranscribe: (id: string) =>
-    fetch(`${BASE}/api/projects/${id}/transcribe`, { method: "POST" }).then((r) => json<Project>(r)),
+    fetch(`/api/projects/${id}/transcribe`, { method: "POST" }).then((r) => json<Project>(r)),
 
   getSubtitles: (id: string) =>
-    fetch(`${BASE}/api/projects/${id}/subtitles`).then((r) =>
+    fetch(`/api/projects/${id}/subtitles`).then((r) =>
       json<{ version: number; segments: Segment[]; marks?: number[] }>(r)
     ),
 
   saveSubtitles: (id: string, segments: Segment[], marks: number[]) =>
-    fetch(`${BASE}/api/projects/${id}/subtitles`, {
+    fetch(`/api/projects/${id}/subtitles`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ segments, marks }),
     }).then((r) => json<{ ok: boolean }>(r)),
 
   getCuts: (id: string) =>
-    fetch(`${BASE}/api/projects/${id}/cuts`).then((r) =>
+    fetch(`/api/projects/${id}/cuts`).then((r) =>
       json<{ status: string; cuts: number[]; error: string | null }>(r)
     ),
 
   startCuts: (id: string) =>
-    fetch(`${BASE}/api/projects/${id}/cuts`, { method: "POST" }).then((r) =>
+    fetch(`/api/projects/${id}/cuts`, { method: "POST" }).then((r) =>
       json<{ status: string; cuts: number[]; error: string | null }>(r)
     ),
 
   getDictionary: () =>
-    fetch(`${BASE}/api/dictionary`).then((r) => json<{ entries: DictEntry[] }>(r)),
+    fetch("/api/dictionary").then((r) => json<{ entries: DictEntry[] }>(r)),
 
   addDictEntry: (wrong: string, right: string) =>
-    fetch(`${BASE}/api/dictionary`, {
+    fetch("/api/dictionary", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ wrong, right }),
     }).then((r) => json<{ entries: DictEntry[] }>(r)),
 
   deleteDictEntry: (id: string) =>
-    fetch(`${BASE}/api/dictionary/${id}`, { method: "DELETE" }).then((r) =>
+    fetch(`/api/dictionary/${id}`, { method: "DELETE" }).then((r) =>
       json<{ entries: DictEntry[] }>(r)
     ),
 
   getLlmStatus: () =>
-    fetch(`${BASE}/api/llm/status`).then((r) => json<{ available: boolean }>(r)),
+    fetch("/api/llm/status").then((r) => json<{ available: boolean }>(r)),
 
-  startFix: (id: string) =>
-    fetch(`${BASE}/api/projects/${id}/fix`, { method: "POST" }).then((r) => json<FixJob>(r)),
+  /** ids 給定時只校正那些字幕(自選範圍),省略則整份。 */
+  startFix: (id: string, ids?: string[]) =>
+    fetch(`/api/projects/${id}/fix`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(ids ? { ids } : {}),
+    }).then((r) => json<FixJob>(r)),
 
   getFix: (id: string) =>
-    fetch(`${BASE}/api/projects/${id}/fix`).then((r) => json<FixJob>(r)),
+    fetch(`/api/projects/${id}/fix`).then((r) => json<FixJob>(r)),
 
-  updateFix: (id: string, suggestions: { id: string; old: string; new: string }[]) =>
-    fetch(`${BASE}/api/projects/${id}/fix`, {
+  /** 把審閱掉的建議從後端移除(分析進行中也可以呼叫)。 */
+  removeFix: (id: string, remove: { id: string; old: string }[]) =>
+    fetch(`/api/projects/${id}/fix`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ suggestions }),
+      body: JSON.stringify({ remove }),
     }).then((r) => json<{ ok: boolean }>(r)),
 
   cancelFix: (id: string) =>
-    fetch(`${BASE}/api/projects/${id}/fix`, { method: "DELETE" }).then((r) => json<{ ok: boolean }>(r)),
+    fetch(`/api/projects/${id}/fix`, { method: "DELETE" }).then((r) => json<{ ok: boolean }>(r)),
 
   getWaveform: (id: string) =>
-    fetch(`${BASE}/api/projects/${id}/waveform`).then((r) =>
+    fetch(`/api/projects/${id}/waveform`).then((r) =>
       json<{ rate: number; peaks: number[] }>(r)
     ),
 
   startBurn: (id: string) =>
-    fetch(`${BASE}/api/projects/${id}/burn`, { method: "POST" }).then((r) => json<BurnJob>(r)),
+    fetch(`/api/projects/${id}/burn`, { method: "POST" }).then((r) => json<BurnJob>(r)),
 
   getBurn: (id: string) =>
-    fetch(`${BASE}/api/projects/${id}/burn`).then((r) => json<BurnJob>(r)),
+    fetch(`/api/projects/${id}/burn`).then((r) => json<BurnJob>(r)),
 
   cancelBurn: (id: string) =>
-    fetch(`${BASE}/api/projects/${id}/burn`, { method: "DELETE" }).then((r) =>
+    fetch(`/api/projects/${id}/burn`, { method: "DELETE" }).then((r) =>
       json<{ ok: boolean }>(r)
     ),
 
-  burnFileUrl: (id: string) => `${BASE}/api/projects/${id}/burn/file`,
+  burnFileUrl: (id: string) => `/api/projects/${id}/burn/file`,
 
-  mediaUrl: (id: string) => `${BASE}/api/projects/${id}/media`,
-  exportUrl: (id: string, format: string) => `${BASE}/api/projects/${id}/export?format=${format}`,
+  startClipsAnalyze: (id: string) =>
+    fetch(`/api/projects/${id}/clips/analyze`, { method: "POST" }).then((r) =>
+      json<ClipsJob>(r)
+    ),
+
+  getClips: (id: string) =>
+    fetch(`/api/projects/${id}/clips`).then((r) => json<ClipsJob>(r)),
+
+  updateClips: (id: string, clips: Clip[]) =>
+    fetch(`/api/projects/${id}/clips`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ clips }),
+    }).then((r) => json<{ clips: Clip[] }>(r)),
+
+  cancelClips: (id: string) =>
+    fetch(`/api/projects/${id}/clips`, { method: "DELETE" }).then((r) =>
+      json<{ ok: boolean }>(r)
+    ),
+
+  startClipExport: (id: string, ids: string[]) =>
+    fetch(`/api/projects/${id}/clips/export`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ids }),
+    }).then((r) => json<ClipExportJob>(r)),
+
+  getClipExport: (id: string) =>
+    fetch(`/api/projects/${id}/clips/export`).then((r) => json<ClipExportJob>(r)),
+
+  cancelClipExport: (id: string) =>
+    fetch(`/api/projects/${id}/clips/export`, { method: "DELETE" }).then((r) =>
+      json<{ ok: boolean }>(r)
+    ),
+
+  clipFileUrl: (id: string, cid: string) => `/api/projects/${id}/clips/${cid}/file`,
+
+  mediaUrl: (id: string) => `/api/projects/${id}/media`,
+  exportUrl: (id: string, format: string) => `/api/projects/${id}/export?format=${format}`,
 };
 
 /** 用 XHR 上傳才拿得到進度。 */
@@ -115,7 +157,7 @@ export function uploadMedia(
 ): Promise<Project> {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
-    xhr.open("POST", `${BASE}/api/projects`);
+    xhr.open("POST", "/api/projects");
     xhr.upload.onprogress = (e) => {
       if (e.lengthComputable) onProgress(e.loaded / e.total);
     };
