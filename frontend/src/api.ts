@@ -69,8 +69,13 @@ export const api = {
   getLlmStatus: () =>
     fetch("/api/llm/status").then((r) => json<{ available: boolean }>(r)),
 
-  startFix: (id: string) =>
-    fetch(`/api/projects/${id}/fix`, { method: "POST" }).then((r) => json<FixJob>(r)),
+  /** ids 給定時只校正那些字幕(自選範圍),省略則整份。 */
+  startFix: (id: string, ids?: string[]) =>
+    fetch(`/api/projects/${id}/fix`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(ids ? { ids } : {}),
+    }).then((r) => json<FixJob>(r)),
 
   getFix: (id: string) =>
     fetch(`/api/projects/${id}/fix`).then((r) => json<FixJob>(r)),

@@ -124,6 +124,12 @@ claude -p --output-format json --model sonnet \
   失敗)。改成系統提示詞要求純 JSON、程式端解析、失敗重試一次。
 - **系統提示詞必須壓成單行**:多行 argv 經 npm 版 claude.cmd 轉手會截斷。
 - **模型**:haiku 實測比 sonnet 更慢又漏抓(23s、4/5 vs 16s、5/5),維持 sonnet。
+- **關 thinking 再快 3 倍**:精簡配置後延遲主因是 thinking 的輸出量
+  (同一批 out tokens 1.2k~4.6k 亂飄,生成 ~100 tok/s)。錯字校正是機械任務,
+  子行程掛 `MAX_THINKING_TOKENS=0` 後單批 13~16s→4~5s、耗時穩定、品質不變。
+- **不必沿用 session**:精簡後的系統提示詞前綴會跨呼叫命中 prompt cache
+  (實測獨立呼叫 cache_read 相同),`--resume` 反而要拖著先前批次的對話史
+  (cache_write 隨批遞增)、多一份 session 狀態要管,還汙染 `claude -r` 清單。
 
 ### 3.6 影片預覽區
 - 影片播放 + 字幕即時疊加預覽。

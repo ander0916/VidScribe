@@ -231,10 +231,15 @@ def llm_status():
 
 
 @app.post("/api/projects/{pid}/fix")
-def start_fix(pid: str):
+def start_fix(pid: str, body: dict = Body(None)):
     _get_project_or_404(pid)
+    ids = (body or {}).get("ids")
+    if ids is not None and (
+        not isinstance(ids, list) or not all(isinstance(i, str) for i in ids)
+    ):
+        raise HTTPException(400, "ids 格式錯誤")
     try:
-        return llm.start(pid)
+        return llm.start(pid, ids)
     except RuntimeError as e:
         raise HTTPException(409, str(e))
 

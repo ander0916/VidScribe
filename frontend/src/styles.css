@@ -1020,6 +1020,15 @@ button {
   background: var(--green-softer);
 }
 
+.export-items button:disabled {
+  color: var(--muted);
+  cursor: default;
+}
+
+.export-items button:disabled:hover {
+  background: none;
+}
+
 a.btn {
   text-decoration: none;
   display: inline-block;

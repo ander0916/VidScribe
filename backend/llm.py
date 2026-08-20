@@ -181,20 +181,28 @@ def remove_suggestions(pid: str, items: list[dict]) -> None:
         _fix_file(pid).unlink(missing_ok=True)
 
 
-def start(pid: str) -> dict:
+def start(pid: str, ids: list[str] | None = None) -> dict:
+    """啟動校正。ids 給定時只校正那些字幕(使用者自選範圍),否則整份。"""
     cmd = find_claude()
     if cmd is None:
         raise RuntimeError("找不到 claude 指令,請先安裝 Claude Code")
     segments = storage.load_subtitles(pid)["segments"]
     if not segments:
         raise RuntimeError("這個專案還沒有字幕")
+    if ids is None:
+        pick = range(len(segments))
+    else:
+        idset = set(ids)
+        pick = [i for i, s in enumerate(segments) if s["id"] in idset]
+        if not pick:
+            raise RuntimeError("選取範圍內沒有字幕")
 
     batches: list[list[int]] = []
     cur: list[int] = []
     chars = 0
-    for i, s in enumerate(segments):
+    for i in pick:
         cur.append(i)
-        chars += len(s["text"])
+        chars += len(segments[i]["text"])
         if len(cur) >= BATCH_LINES or chars >= BATCH_CHARS:
             batches.append(cur)
             cur, chars = [], 0
@@ -246,6 +254,9 @@ def _run_batch(cmd: list[str], segments: list[dict], indices: list[int]) -> list
         encoding="utf-8",
         errors="replace",
         timeout=TIMEOUT,
+        # 關掉 thinking:錯字校正是機械任務,延遲主因就是 thinking 的輸出量
+        # (單批 13~16s→4~5s,且耗時不再隨思考量飄;2026-08-20 實測品質不變)
+        env={**os.environ, "MAX_THINKING_TOKENS": "0"},
     )
     if proc.returncode != 0:
         raise RuntimeError(f"claude 執行失敗:{(proc.stderr or proc.stdout).strip()[-300:]}")
