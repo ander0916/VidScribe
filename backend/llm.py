@@ -2,8 +2,13 @@
 
 設計原則(見 SPEC 3.5):
 - 指令自動尋路,找不到就整個功能隱藏,不影響其他功能
-- 只送「行號+文字」,LLM 碰不到時間軸;回傳用 --json-schema 強制結構
-- 大批次呼叫(每次呼叫有 ~30k token 的固定開銷)
+- 只送「行號+文字」,LLM 碰不到時間軸;回傳純 JSON 由程式端驗證
+- 精簡呼叫:--system-prompt 換掉 Claude Code 預設 agent 環境
+  (系統提示詞+工具+MCP 是每批 ~30k token/40+ 秒固定開銷的大宗,
+  也會注入專案環境資訊造成誤傷;2026-08-20 實測單批 62s→16s)
+- 不用 --json-schema:結構化輸出靠工具呼叫要多繞兩個 turn,
+  且和自訂系統提示詞/--disallowedTools 衝突;改要求純 JSON+失敗重試一次
+- 大批次呼叫+批次完成即可審(前端串流合併)
 - 建議不自動套用,由前端 diff 審閱
 """
 
@@ -23,27 +28,6 @@ BATCH_CHARS = 4000  # 每批的字元預算
 BATCH_LINES = 80
 TIMEOUT = 300
 
-SCHEMA = json.dumps(
-    {
-        "type": "object",
-        "properties": {
-            "changes": {
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "i": {"type": "integer"},
-                        "t": {"type": "string"},
-                    },
-                    "required": ["i", "t"],
-                },
-            }
-        },
-        "required": ["changes"],
-    },
-    separators=(",", ":"),
-)
-
 PROMPT = """你是台灣的專業字幕校對員。最後面附上一段影片的字幕 JSON 陣列(繁體中文、台灣口語),每項有行號 i 與文字 t。
 請找出並修正:
 1. 語音辨識造成的同音錯字與選字錯誤(例:其美博物館→奇美博物館、發老→法老、在→再)
@@ -56,6 +40,13 @@ PROMPT = """你是台灣的專業字幕校對員。最後面附上一段影片�
 - 字數盡量與原文相近,禁止重寫句子
 - 標點維持原樣,不要新增句尾標點
 用 changes 回傳:i 是原行號,t 是修正後的整行文字。整批都沒錯就回傳空的 changes。"""
+
+# 走 --system-prompt(argv)必須壓成單行:多行參數經 npm 版 claude.cmd 轉手會截斷
+SYSTEM_PROMPT = (
+    PROMPT.replace("\n", " ")
+    + ' 直接回傳純 JSON(不要 markdown 圍欄、不要任何其他文字),'
+    + '格式:{"changes":[{"i":行號,"t":"修正後整行"}]}。'
+)
 
 _jobs: dict[str, dict] = {}
 _lock = threading.Lock()
@@ -233,17 +224,23 @@ def _run_batch(cmd: list[str], segments: list[dict], indices: list[int]) -> list
     payload = json.dumps(
         [{"i": i, "t": segments[i]["text"]} for i in indices], ensure_ascii=False
     )
-    # 多行的提示詞不放命令列(npm 版 claude.cmd 經 cmd /c 轉手會壞),
-    # 全部改走 stdin;命令列只留單行參數。
     proc = subprocess.run(
         cmd
         + [
             "-p",
             "--output-format", "json",
-            "--json-schema", SCHEMA,
             "--model", MODEL,
+            "--system-prompt", SYSTEM_PROMPT,
+            # 連「動態環境段落」也不要:模型看到工作目錄叫 VidScribe,
+            # 會把字幕裡的「What's up!」改成「VidScribe!」(實測誤傷)
+            "--exclude-dynamic-system-prompt-sections",
+            # 不載使用者的 MCP servers/全域設定/工具:純文字任務用不到,
+            # 少掉 ~30k token 的載入,單批快 4 倍(2026-08-20 實測)
+            "--strict-mcp-config",
+            "--setting-sources", "project",
+            "--disallowedTools", "*",
         ],
-        input=f"{PROMPT}\n\n字幕內容:\n{payload}",
+        input=f"字幕內容:\n{payload}",
         capture_output=True,
         text=True,
         encoding="utf-8",
@@ -255,9 +252,8 @@ def _run_batch(cmd: list[str], segments: list[dict], indices: list[int]) -> list
     data = json.loads(proc.stdout)
     if data.get("is_error") or data.get("subtype") != "success":
         raise RuntimeError(f"claude 回傳錯誤:{str(data.get('result'))[:300]}")
-    out = data.get("structured_output")
+    out = data.get("structured_output")  # 保險:未來若掛回 schema 也吃得下
     if not isinstance(out, dict):
-        # 少數情況沒有 structured_output,退而求其次從文字結果解析
         text = str(data.get("result", "")).strip()
         if text.startswith("```"):
             text = text.strip("`").removeprefix("json").strip()
@@ -280,7 +276,15 @@ def _run(pid: str, cmd: list[str], segments: list[dict], batches: list[list[int]
             if job["cancel"]:
                 job["status"] = "canceled"
                 return
-            suggestions = _run_batch(cmd, segments, indices)
+            try:
+                suggestions = _run_batch(cmd, segments, indices)
+            except Exception:
+                # 沒有 schema 強制,偶爾會拿到壞 JSON;重試一次,再失敗才放棄整輪
+                traceback.print_exc()
+                if job["cancel"]:
+                    job["status"] = "canceled"
+                    return
+                suggestions = _run_batch(cmd, segments, indices)
             with _lock:
                 job["suggestions"].extend(suggestions)
                 job["done"] += 1
