@@ -5,9 +5,11 @@ stderr 導檔避免管線死鎖、cwd=專案目錄配裸檔名避開 Windows 濾
 剪段後音訊一律重編 aac(直接 copy 容易在非關鍵幀邊界出問題)。
 """
 
+import os
 import re
 import subprocess
 import threading
+import time
 import traceback
 
 from . import burn, clips, config, exporter, storage
@@ -134,7 +136,9 @@ def _render_clip(pid: str, d, media_name: str, clip: dict, iw: int, ih: int, job
         encoding="utf-8",
     )
     vf = _build_vf(iw, ih, float(clip.get("pan", 0.0)))
-    out_rel = f"clips/{clip['id']}.mp4"
+    # 先寫 .part,成功才轉正:伺服器中途被殺不會留下看似可下載的半成品
+    out_final = f"clips/{clip['id']}.mp4"
+    out_part = out_final + ".part"
     err_file = d / "clip_err.txt"
 
     last_err = ""
@@ -148,7 +152,9 @@ def _render_clip(pid: str, d, media_name: str, clip: dict, iw: int, ih: int, job
             args += ["-preset", "p5", "-cq", "19"]
         else:
             args += ["-preset", "medium", "-crf", "19"]
-        args += ["-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", out_rel]
+        # 副檔名是 .part,ffmpeg 猜不到容器,要明講 -f mp4
+        args += ["-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart",
+                 "-f", "mp4", out_part]
 
         with err_file.open("w", encoding="utf-8") as ef:
             proc = subprocess.Popen(
@@ -169,6 +175,14 @@ def _render_clip(pid: str, d, media_name: str, clip: dict, iw: int, ih: int, job
             return
         if proc.returncode == 0:
             err_file.unlink(missing_ok=True)
+            # 轉正;舊成品正被下載時 Windows 會拒絕,小睡重試(同 storage._save_json)
+            for attempt in range(5):
+                try:
+                    os.replace(d / out_part, d / out_final)
+                    return
+                except PermissionError:
+                    time.sleep(0.05 * (attempt + 1))
+            os.replace(d / out_part, d / out_final)
             return
         last_err = err_file.read_text(encoding="utf-8", errors="replace").strip()[-300:]
         print(f"[vidscribe] {vcodec} 短片匯出失敗,換下一個編碼器:{last_err}")
@@ -180,10 +194,18 @@ def _run(pid: str, media_name: str, job: dict) -> None:
     d = storage.project_dir(pid)
     try:
         iw, ih = burn._probe_size(d / media_name)
-        clips.clips_dir(pid).mkdir(exist_ok=True)
+        out_dir = clips.clips_dir(pid)
+        out_dir.mkdir(exist_ok=True)
         while True:
             with _lock:
-                if job["cancel"] or not job["queue"]:
+                # 收尾必須跟「佇列確實空了」在同一把鎖裡決定:
+                # 不然 start() 可能在 break 與標記 done 之間塞新 id 進來,永遠不被處理
+                if job["cancel"]:
+                    job["status"] = "canceled"
+                    break
+                if not job["queue"]:
+                    job["status"] = "done"
+                    job["progress"] = 1.0
                     break
                 cid = job["queue"].pop(0)
                 job["current"] = cid
@@ -194,18 +216,24 @@ def _run(pid: str, media_name: str, job: dict) -> None:
                 continue
             _render_clip(pid, d, media_name, clip, iw, ih, job)
             if job["cancel"]:
+                with _lock:
+                    job["status"] = "canceled"
                 break
+            # 渲染期間被編輯過就作廢重排,保證成品永遠對得上目前的參數
+            latest = next((c for c in clips.load_clips(pid) if c["id"] == cid), None)
+            if latest is None or any(latest[k] != clip[k] for k in ("start", "end", "pan")):
+                storage.discard_file(out_dir / f"{cid}.mp4")
+                if latest is not None:
+                    with _lock:
+                        if cid not in job["queue"]:
+                            job["queue"].append(cid)
+                continue
             with _lock:
                 job["done_ids"].append(cid)
-        if job["cancel"]:
-            job["status"] = "canceled"
-            # 半成品作廢
+        if job["status"] == "canceled":
             cur = job.get("current")
             if cur:
-                (clips.clips_dir(pid) / f"{cur}.mp4").unlink(missing_ok=True)
-        else:
-            job["status"] = "done"
-            job["progress"] = 1.0
+                storage.discard_file(out_dir / f"{cur}.mp4.part")
     except Exception as e:
         traceback.print_exc()
         if job.get("status") != "canceled":
@@ -213,7 +241,7 @@ def _run(pid: str, media_name: str, job: dict) -> None:
             cur = job.get("current")
             job["error"] = f"{cur}:{str(e)[:300]}" if cur else str(e)[:400]
             if cur:
-                (clips.clips_dir(pid) / f"{cur}.mp4").unlink(missing_ok=True)
+                storage.discard_file(clips.clips_dir(pid) / f"{cur}.mp4.part")
     finally:
         job["proc"] = None
         job["current"] = None

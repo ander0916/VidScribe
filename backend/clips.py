@@ -8,6 +8,7 @@
 """
 
 import json
+import math
 import os
 import shutil
 import subprocess
@@ -154,11 +155,19 @@ def update_clips(pid: str, clips: list[dict]) -> list[dict]:
             continue  # 只接受既有 id,防偽造
         prev = old[cid]
         item = dict(prev)
-        item["start"] = round(float(c.get("start", prev["start"])), 3)
-        item["end"] = round(float(c.get("end", prev["end"])), 3)
-        item["pan"] = max(-1.0, min(1.0, float(c.get("pan", prev.get("pan", 0.0)))))
-        if item["end"] - item["start"] < 1.0:
+        try:
+            item["start"] = round(float(c.get("start", prev["start"])), 3)
+            item["end"] = round(float(c.get("end", prev["end"])), 3)
+            item["pan"] = max(-1.0, min(1.0, float(c.get("pan", prev.get("pan", 0.0)))))
+            valid = all(
+                math.isfinite(item[k]) for k in ("start", "end", "pan")
+            ) and item["start"] >= 0
+        except (TypeError, ValueError):
+            valid = False
+        if not valid or item["end"] - item["start"] < 1.0:
+            # 數值不合理(含 JSON 偷渡的 NaN/Infinity)一律退回原值
             item["start"], item["end"] = prev["start"], prev["end"]
+            item["pan"] = prev.get("pan", 0.0)
         cleaned.append(item)
 
     kept_ids = set()
@@ -169,7 +178,8 @@ def update_clips(pid: str, clips: list[dict]) -> list[dict]:
             kept_ids.add(c["id"])
     for cid in old:
         if cid not in kept_ids:
-            (clips_dir(pid) / f"{cid}.mp4").unlink(missing_ok=True)
+            # 匯出中的檔刪不掉沒關係:渲染完成後的過期檢查會作廢重排
+            storage.discard_file(clips_dir(pid) / f"{cid}.mp4")
 
     save_clips(pid, cleaned)
     return cleaned

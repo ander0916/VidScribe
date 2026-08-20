@@ -42,6 +42,15 @@ def _save_json(path: Path, data) -> None:
         os.replace(tmp, path)
 
 
+def discard_file(path: Path) -> None:
+    """盡力刪除檔案;Windows 上被別的行程握著(如 ffmpeg 寫入中)就先留著,
+    呼叫端要自備補救(例:渲染完成後的過期檢查會再作廢一次)。"""
+    try:
+        path.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
 def create_project(display_name: str, media_suffix: str) -> dict:
     pid = uuid.uuid4().hex[:12]
     d = project_dir(pid)

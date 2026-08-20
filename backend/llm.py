@@ -41,11 +41,14 @@ PROMPT = """你是台灣的專業字幕校對員。最後面附上一段影片�
 - 標點維持原樣,不要新增句尾標點
 用 changes 回傳:i 是原行號,t 是修正後的整行文字。整批都沒錯就回傳空的 changes。"""
 
-# 走 --system-prompt(argv)必須壓成單行:多行參數經 npm 版 claude.cmd 轉手會截斷
+# 走 --system-prompt(argv)有兩個地雷:npm 版 claude.cmd 經 cmd /c 轉手,
+# ①多行會被截斷 → 壓成單行;②內嵌 ASCII 雙引號的 \" 跳脫會被 %* 再展開弄壞
+# → 格式用文字描述,不放字面引號
 SYSTEM_PROMPT = (
     PROMPT.replace("\n", " ")
-    + ' 直接回傳純 JSON(不要 markdown 圍欄、不要任何其他文字),'
-    + '格式:{"changes":[{"i":行號,"t":"修正後整行"}]}。'
+    + " 直接回傳純 JSON,不要 markdown 圍欄、不要任何其他文字:"
+    + "頂層是物件,唯一的鍵 changes 是陣列,每個元素是含整數 i(原行號)"
+    + "與字串 t(修正後整行)的物件。"
 )
 
 _jobs: dict[str, dict] = {}

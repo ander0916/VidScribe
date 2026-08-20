@@ -272,6 +272,9 @@ def cancel_fix(pid: str):
 @app.post("/api/projects/{pid}/clips/analyze")
 def start_clips_analyze(pid: str):
     _get_project_or_404(pid)
+    # 分析成功會整批換掉 clip id 並清空 clips/,和進行中的匯出互斥
+    if clip_export.get_state(pid)["status"] == "running":
+        raise HTTPException(409, "短片匯出進行中,請先等它完成或取消,再重新分析")
     try:
         return clips.start(pid)
     except RuntimeError as e:
