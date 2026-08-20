@@ -248,12 +248,12 @@ def get_fix(pid: str):
 @app.put("/api/projects/{pid}/fix")
 def update_fix(pid: str, body: dict = Body(...)):
     _get_project_or_404(pid)
-    suggestions = body.get("suggestions")
-    if not isinstance(suggestions, list) or not all(
-        isinstance(s, dict) and "id" in s and "old" in s and "new" in s for s in suggestions
+    items = body.get("remove")
+    if not isinstance(items, list) or not all(
+        isinstance(s, dict) and "id" in s and "old" in s for s in items
     ):
-        raise HTTPException(400, "suggestions 格式錯誤")
-    llm.update_suggestions(pid, suggestions)
+        raise HTTPException(400, "remove 格式錯誤")
+    llm.remove_suggestions(pid, items)
     return {"ok": True}
 
 

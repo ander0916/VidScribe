@@ -75,11 +75,12 @@ export const api = {
   getFix: (id: string) =>
     fetch(`/api/projects/${id}/fix`).then((r) => json<FixJob>(r)),
 
-  updateFix: (id: string, suggestions: { id: string; old: string; new: string }[]) =>
+  /** 把審閱掉的建議從後端移除(分析進行中也可以呼叫)。 */
+  removeFix: (id: string, remove: { id: string; old: string }[]) =>
     fetch(`/api/projects/${id}/fix`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ suggestions }),
+      body: JSON.stringify({ remove }),
     }).then((r) => json<{ ok: boolean }>(r)),
 
   cancelFix: (id: string) =>

@@ -140,15 +140,51 @@ def cancel(pid: str) -> None:
     _fix_file(pid).unlink(missing_ok=True)
 
 
-def update_suggestions(pid: str, suggestions: list[dict]) -> None:
-    """審閱時同步剩餘清單(接受/略過一條就少一條),關機重開能從剩的繼續。"""
+def remove_suggestions(pid: str, items: list[dict]) -> None:
+    """把審閱掉的建議(接受或略過)從清單移除,關機重開能從剩的繼續。
+
+    用「移除哪幾條」而不是「整份清單覆蓋」:分析還在跑時工作執行緒
+    同時在追加新批次的建議,覆蓋語意會把新到的蓋掉。
+    """
+    keys = {(str(s.get("id")), str(s.get("old"))) for s in items}
     with _lock:
         job = _jobs.get(pid)
-        if job and job["status"] == "done":
-            job["suggestions"] = suggestions
-        holder = dict(job) if job else {"total": 1, "started_at": None, "suggestions": suggestions}
-    holder["suggestions"] = suggestions
-    if suggestions:
+        if job is not None:
+            job["suggestions"] = [
+                s for s in job["suggestions"] if (s["id"], s["old"]) not in keys
+            ]
+            if job["status"] == "running":
+                return  # 進行中不落地,完成時 _run 會存最終清單
+            remaining = list(job["suggestions"])
+            holder = {
+                "total": job.get("total", 1),
+                "started_at": job.get("started_at"),
+                "suggestions": remaining,
+            }
+        else:
+            remaining = None
+            holder = None
+    if remaining is None:
+        # 伺服器重啟後從 fix.json 接著審的情況
+        f = _fix_file(pid)
+        if not f.is_file():
+            return
+        try:
+            with f.open("r", encoding="utf-8") as fp:
+                data = json.load(fp)
+        except (OSError, json.JSONDecodeError):
+            return
+        remaining = [
+            s
+            for s in data.get("suggestions", [])
+            if (str(s.get("id")), str(s.get("old"))) not in keys
+        ]
+        holder = {
+            "total": data.get("total", 1),
+            "started_at": data.get("started_at"),
+            "suggestions": remaining,
+        }
+    if remaining:
         _save_fix_file(pid, holder)
     else:
         _fix_file(pid).unlink(missing_ok=True)
@@ -249,8 +285,10 @@ def _run(pid: str, cmd: list[str], segments: list[dict], batches: list[list[int]
                 job["suggestions"].extend(suggestions)
                 job["done"] += 1
         job["status"] = "done"
+        with _lock:
+            holder = dict(job)  # 邊跑邊審會併發改 suggestions,鎖內拿一致的快照
         try:
-            _save_fix_file(pid, job)
+            _save_fix_file(pid, holder)
         except OSError:
             traceback.print_exc()  # 存檔失敗不影響本次結果,只是重開伺服器會遺失
     except Exception as e:
