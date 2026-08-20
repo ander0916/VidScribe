@@ -1,7 +1,7 @@
 export default function Brand() {
   return (
     <span className="brand">
-      Vid<span className="brand-accent">Scribe</span>
+      Video<span className="brand-accent">Sub</span>
     </span>
   );
 }

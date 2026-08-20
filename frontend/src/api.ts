@@ -157,7 +157,7 @@ export function uploadMedia(
 ): Promise<Project> {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
-    xhr.open("POST", "/api/projects");
+    xhr.open("POST", `${BASE}/api/projects`);
     xhr.upload.onprogress = (e) => {
       if (e.lengthComputable) onProgress(e.loaded / e.total);
     };

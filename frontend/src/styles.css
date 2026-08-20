@@ -1,4 +1,4 @@
-/* ---- VidScribe 設計基調(對齊 What'Sub 風格) ----
+/* ---- VideoSub 設計基調(對齊 What'Sub 風格) ----
    米白底、白色卡片、圓角膠囊按鈕、螢光綠強調色;
    時間碼一律綠色等寬字,播放中那句淺綠底。全系統字型,離線可用。 */
 
@@ -74,15 +74,18 @@ button {
 /* ---- 品牌 ---- */
 
 .brand {
-  font-size: 17px;
-  font-weight: 700;
-  letter-spacing: 0.02em;
+  font-size: 20px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
   color: var(--text);
   white-space: nowrap;
+  display: inline-flex;
+  align-items: baseline;
 }
 
 .brand-accent {
-  color: var(--green-dark);
+  color: var(--green);
+  margin-left: 1px;
 }
 
 .brand-link {
